@@ -221,14 +221,10 @@ class DocumentProcessor:
         try:
             tags_to_add = []
 
-            # Add anomaly type tags
+            # Add anomaly type tags (specific anomaly types are sufficient, no need for generic "detected" tag)
             for anomaly_type in results.get("anomaly_types", []):
                 tag_name = f"anomaly:{anomaly_type}"
                 tags_to_add.append(tag_name)
-
-            # Add overall anomaly tag if any detected
-            if results.get("has_anomalies"):
-                tags_to_add.append("anomaly:detected")
 
             # Replace anomaly tags on document (removes old anomaly tags, adds current ones)
             # Always call this, even if tags_to_add is empty, to clear old anomaly tags
