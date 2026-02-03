@@ -181,6 +181,63 @@ class PaperlessClient:
             logger.error(traceback.format_exc())
             return False
 
+    def replace_document_anomaly_tags(self, doc_id: int, new_anomaly_tag_names: List[str]) -> bool:
+        """
+        Replace all anomaly tags on a document with the current detection results.
+        Removes old anomaly:* tags and adds new ones, preserving non-anomaly tags.
+
+        Args:
+            doc_id: Document ID
+            new_anomaly_tag_names: List of anomaly tag names to set (e.g., ['anomaly:detected', 'anomaly:page_discontinuity'])
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Get current document
+            doc = self.get_document(doc_id)
+            if not doc:
+                logger.error(f"Could not retrieve document {doc_id}")
+                return False
+
+            # Get all current tags on document
+            current_tag_ids = doc.get("tags", [])
+
+            # Get all tag details to identify anomaly tags
+            response = self._make_request("GET", "/api/tags/")
+            all_tags = {tag["id"]: tag["name"] for tag in response.get("results", [])}
+
+            # Separate anomaly tags from other tags
+            non_anomaly_tag_ids = [
+                tag_id for tag_id in current_tag_ids
+                if not all_tags.get(tag_id, "").startswith("anomaly:")
+            ]
+
+            logger.debug(f"Document {doc_id}: removing anomaly tags, keeping {len(non_anomaly_tag_ids)} non-anomaly tags")
+
+            # Get or create new anomaly tags
+            new_anomaly_tag_ids = []
+            for tag_name in new_anomaly_tag_names:
+                tag_id = self.get_or_create_tag(tag_name)
+                if tag_id:
+                    new_anomaly_tag_ids.append(tag_id)
+                else:
+                    logger.warning(f"Could not get/create tag '{tag_name}'")
+
+            # Combine non-anomaly tags with new anomaly tags
+            final_tag_ids = non_anomaly_tag_ids + new_anomaly_tag_ids
+
+            logger.info(f"Replacing anomaly tags on document {doc_id}: {new_anomaly_tag_names} (IDs: {new_anomaly_tag_ids})")
+            logger.debug(f"Final tag IDs: {final_tag_ids}")
+
+            # Update document with final tag list
+            return self.update_document_tags(doc_id, final_tag_ids)
+        except Exception as e:
+            logger.error(f"Failed to replace anomaly tags on document {doc_id}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+
     def get_or_create_tag(self, tag_name: str) -> Optional[int]:
         """Get tag ID by name, creating it if it doesn't exist."""
         try:
