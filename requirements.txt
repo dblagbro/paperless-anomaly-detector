@@ -1,0 +1,43 @@
+# Web framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# HTTP client
+httpx==0.26.0
+requests==2.31.0
+
+# Database
+sqlalchemy==2.0.25
+alembic==1.13.1
+
+# Background jobs
+apscheduler==3.10.4
+
+# Data processing
+pandas==2.1.4
+numpy==1.26.3
+
+# Text processing and pattern matching
+python-dateutil==2.8.2
+regex==2023.12.25
+
+# PDF/OCR text extraction (optional, if we need to re-process)
+pypdf2==3.0.1
+
+# Image forensics and analysis
+Pillow==10.2.0
+opencv-python-headless==4.9.0.80
+scikit-image==0.22.0
+
+# Optional: LLM integration
+anthropic==0.18.1
+openai==1.10.0
+
+# Logging
+python-json-logger==2.0.7
+
+# Testing
+pytest==7.4.4
+pytest-asyncio==0.23.3
