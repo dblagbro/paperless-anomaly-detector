@@ -230,13 +230,16 @@ class DocumentProcessor:
             if results.get("has_anomalies"):
                 tags_to_add.append("anomaly:detected")
 
-            # Add tags to document
-            if tags_to_add:
-                success = self.paperless_client.add_document_tags(doc_id, tags_to_add)
-                if success:
-                    # Don't modify processed_doc after it's added to session
-                    # processed_doc.tags_written = tags_to_add
-                    logger.info(f"Added {len(tags_to_add)} tags to document {doc_id}")
+            # Replace anomaly tags on document (removes old anomaly tags, adds current ones)
+            # Always call this, even if tags_to_add is empty, to clear old anomaly tags
+            success = self.paperless_client.replace_document_anomaly_tags(doc_id, tags_to_add)
+            if success:
+                # Don't modify processed_doc after it's added to session
+                # processed_doc.tags_written = tags_to_add
+                if tags_to_add:
+                    logger.info(f"Set {len(tags_to_add)} anomaly tags on document {doc_id}")
+                else:
+                    logger.info(f"Cleared anomaly tags from document {doc_id} (no anomalies detected)")
 
             # Update document type if detected
             if results.get("document_type") and results["document_type"] != "unknown":
