@@ -5,6 +5,22 @@ All notable changes to the Paperless Anomaly Detector project will be documented
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1] - 2026-02-03
+
+### Fixed
+- **Critical bug fix**: Tag synchronization between anomaly detector and Paperless-ngx
+  - Implemented `replace_document_anomaly_tags()` method to properly replace tags instead of accumulating them
+  - Fixed issue where old anomaly tags persisted in Paperless after reprocessing
+  - Cleared stale database records and reprocessed all documents for clean state
+  - Ensured tags with other prefixes (e.g., "AIanomaly:") are preserved during tag replacement
+  - Verified complete synchronization: all 73 documents now match perfectly between UI and Paperless
+- Database cleanup removed orphaned records for deleted documents
+- Tag replacement now correctly handles documents with no anomalies (clears all anomaly tags)
+
+### Changed
+- Tag writing logic now replaces anomaly tags instead of appending to existing tags
+- Improved tag synchronization to maintain consistency across systems
+
 ## [1.0] - 2026-02-03
 
 ### Initial Release
