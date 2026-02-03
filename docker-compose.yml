@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  anomaly-detector:
+    build: .
+    container_name: anomaly-detector
+    restart: unless-stopped
+    environment:
+      # Paperless connection
+      PAPERLESS_API_BASE_URL: http://paperless-web:8000
+      PAPERLESS_API_TOKEN: ${PAPERLESS_API_TOKEN}
+
+      # Optional LLM
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-claude-3-5-sonnet-20241022}
+
+      # Configuration
+      POLLING_INTERVAL: ${POLLING_INTERVAL:-300}
+      BATCH_SIZE: ${BATCH_SIZE:-10}
+      BALANCE_TOLERANCE: ${BALANCE_TOLERANCE:-0.01}
+      LAYOUT_VARIANCE_THRESHOLD: ${LAYOUT_VARIANCE_THRESHOLD:-0.3}
+
+      # Web UI
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: 8050
+
+      # Database
+      DATABASE_URL: sqlite:///data/anomaly_detector.db
+
+      # Logging
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+    volumes:
+      # Persist database
+      - anomaly-data:/app/data
+
+    ports:
+      - "8050:8050"
+
+    networks:
+      - default
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8050/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  anomaly-data:
+
+networks:
+  default:
+    external: true
+    name: docker_default
