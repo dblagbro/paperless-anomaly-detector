@@ -572,31 +572,45 @@ class AnomalyDetector:
                                 "declared_max": declared_max,
                                 "actual_count": actual_page_count
                             })
-                    elif actual_page_count > 1:
-                        # No page numbers found but document has multiple pages
-                        result["flags"].append({
-                            "type": "page_discontinuity",
-                            "description": "No page numbers found in multi-page document",
-                            "severity": "low",
-                            "details": [f"Document has {actual_page_count} pages but no page numbers detected"],
-                            "actual_count": actual_page_count
-                        })
+                    # Removed: Don't flag documents that simply don't have page numbers.
+                    # Many documents don't use page numbering and that's perfectly normal.
                 elif pattern_def["name"] == "duplicate_lines":
-                    # Check for duplicate lines
+                    # Check for duplicate TRANSACTION lines (not headers/footers/addresses)
+                    # Only flag lines that contain financial data (amounts, dates, check numbers)
                     seen_lines = {}
                     for line in lines:
                         line_clean = line.strip()
-                        if len(line_clean) > 20:  # Ignore short lines
-                            if line_clean in seen_lines:
-                                seen_lines[line_clean] += 1
-                            else:
-                                seen_lines[line_clean] = 1
+
+                        # Only check lines that contain financial transaction indicators:
+                        # - Dollar amounts or decimal amounts
+                        # - Date patterns
+                        # - Check numbers (4 digits followed by date/amount)
+                        has_amount = bool(re.search(r'\$\s*[\d,]+\.\d{2}|\b[\d,]+\.\d{2}\b', line_clean))
+                        has_date = bool(re.search(r'\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b', line_clean))
+                        has_check_num = bool(re.search(r'\b\d{4}\b', line_clean))
+
+                        # Line must have financial indicators to be considered
+                        if len(line_clean) > 20 and (has_amount or (has_date and has_check_num)):
+                            # Exclude common headers/footers by checking for keywords
+                            lower_line = line_clean.lower()
+                            is_header = any(keyword in lower_line for keyword in [
+                                'page', 'account', 'statement', 'balance', 'date', 'description',
+                                'amount', 'check', 'deposit', 'withdrawal', 'branch', 'address',
+                                'customer service', 'member fdic', 'routing', 'account number'
+                            ])
+
+                            # Only track non-header lines with transaction data
+                            if not is_header:
+                                if line_clean in seen_lines:
+                                    seen_lines[line_clean] += 1
+                                else:
+                                    seen_lines[line_clean] = 1
 
                     duplicates = {line: count for line, count in seen_lines.items() if count > 1}
                     if duplicates:
                         result["flags"].append({
                             "type": "duplicate_lines",
-                            "description": f"Found {len(duplicates)} duplicate lines",
+                            "description": f"Found {len(duplicates)} duplicate transaction lines",
                             "severity": "medium",
                             "details": list(duplicates.keys())[:3]  # First 3 examples
                         })
