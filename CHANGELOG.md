@@ -5,6 +5,25 @@ All notable changes to the Paperless Anomaly Detector project will be documented
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2] - 2026-02-04
+
+### Fixed
+- **Improved page_discontinuity detection accuracy**
+  - Removed false positive: Documents without page numbers are no longer flagged as anomalies
+  - Now only flags documents with actual page numbering inconsistencies (e.g., "Page 2 of 4" but only 1 page exists)
+  - Reduced false positives by 6 documents in test corpus
+
+- **Improved duplicate_lines detection accuracy**
+  - Now only flags duplicate transaction lines (checks, amounts in accounting lists)
+  - Excludes headers, footers, and addresses that repeat on each page
+  - Filters for lines containing financial data (dollar amounts, dates, check numbers)
+  - Ignores common document structure elements (page headers, branch addresses, etc.)
+  - Reduced false positives by 26 documents in test corpus (from 45 to 19)
+
+### Changed
+- Enhanced detection logic to focus on genuine anomalies rather than normal document variance
+- Improved pattern matching to distinguish between document structure and transaction data
+
 ## [1.1] - 2026-02-03
 
 ### Fixed
