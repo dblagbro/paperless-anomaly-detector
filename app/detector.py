@@ -534,33 +534,75 @@ class AnomalyDetector:
                     # Enhanced page discontinuity check
                     page_matches = re.findall(r"page\s+(\d+)\s+of\s+(\d+)", content, re.IGNORECASE)
                     if page_matches:
-                        found_pages = set()
-                        declared_max = 0
-                        for page_num, max_page in page_matches:
-                            found_pages.add(int(page_num))
-                            declared_max = max(declared_max, int(max_page))
+                        # Collect all (page_num, max_page) pairs with their individual declared values
+                        pairs = [(int(pn), int(mp)) for pn, mp in page_matches]
+                        all_declared_vals = [mp for _, mp in pairs]
+                        distinct_declared = set(all_declared_vals)
+                        raw_declared_max = max(all_declared_vals)
+
+                        # Resolve mixed numbering systems
+                        # e.g., NYSCEF batch "page 16 of 17" mixed with bank statement "page 1 of 2"
+                        # When actual page count matches one of the declared values, restrict to that context
+                        if len(distinct_declared) > 1 and actual_page_count > 0 and actual_page_count in distinct_declared:
+                            effective_declared = actual_page_count
+                            effective_found = {pn for pn, mp in pairs if mp == actual_page_count}
+                        else:
+                            effective_declared = raw_declared_max
+                            effective_found = {pn for pn, _ in pairs}
+
+                        min_found = min(effective_found)
+                        max_found = max(effective_found)
 
                         issues = []
                         severity = "low"
 
-                        # Check if actual page count differs from declared
-                        if actual_page_count > 0 and declared_max != actual_page_count:
-                            issues.append(f"Document has {actual_page_count} pages but page headers declare {declared_max} pages")
-                            severity = "high"
+                        if actual_page_count > 0:
+                            if actual_page_count > effective_declared:
+                                # PDF has MORE pages than declared — embedded sub-document page refs
+                                # (e.g., NYSCEF court filing contains a 4-page exhibit; actual=183, declared=4)
+                                # Not a real anomaly — suppress.
+                                pass
 
-                        # Check for missing page numbers
-                        if declared_max > 0:
-                            expected_pages = set(range(1, declared_max + 1))
-                            missing_pages = expected_pages - found_pages
-                            if missing_pages:
-                                issues.append(f"Missing page numbers: {sorted(missing_pages)}")
+                            elif actual_page_count < effective_declared and min_found > 1:
+                                # Continuation/excerpt: document starts at page 2+ (no page 1)
+                                # This is a portion of a larger multi-part document — suppress.
+                                pass
+
+                            elif actual_page_count == effective_declared and min_found > 1:
+                                # Cover page has no page stamp but rest are present — suppress.
+                                pass
+
+                            elif actual_page_count == effective_declared:
+                                # PDF is the right length; only flag if internal gaps exist
+                                # (pages missing in the middle of the stamped sequence)
+                                if min_found == 1 and max_found > 1:
+                                    expected = set(range(1, max_found + 1))
+                                    internal_gaps = expected - effective_found
+                                    if internal_gaps:
+                                        issues.append(
+                                            f"Page stamps missing for pages {sorted(internal_gaps)} "
+                                            f"(PDF has correct {actual_page_count} pages)"
+                                        )
+                                        severity = "low"
+
+                            elif actual_page_count < effective_declared and min_found == 1:
+                                # Genuinely short PDF: starts at page 1 but fewer pages than declared
+                                pages_missing = effective_declared - actual_page_count
+                                issues.append(
+                                    f"PDF has {actual_page_count} page(s) but page headers declare "
+                                    f"{effective_declared} — {pages_missing} page(s) may be missing"
+                                )
                                 severity = "medium"
 
-                            # Check for extra pages
-                            extra_pages = found_pages - expected_pages
-                            if extra_pages:
-                                issues.append(f"Unexpected page numbers found: {sorted(extra_pages)}")
-                                severity = "medium"
+                                # Additionally flag internal gaps if any (e.g., found=[1,3], declared=4, actual=2)
+                                expected = set(range(min_found, max_found + 1))
+                                internal_gaps = expected - effective_found
+                                if internal_gaps:
+                                    issues.append(
+                                        f"Non-sequential page stamps: pages {sorted(internal_gaps)} "
+                                        f"not referenced between pages {min_found}–{max_found}"
+                                    )
+                                    severity = "high"
 
                         if issues:
                             result["flags"].append({
@@ -568,12 +610,11 @@ class AnomalyDetector:
                                 "description": "Page numbering inconsistencies detected",
                                 "severity": severity,
                                 "details": issues,
-                                "found_pages": sorted(found_pages),
-                                "declared_max": declared_max,
+                                "found_pages": sorted(effective_found),
+                                "declared_max": effective_declared,
                                 "actual_count": actual_page_count
                             })
-                    # Removed: Don't flag documents that simply don't have page numbers.
-                    # Many documents don't use page numbering and that's perfectly normal.
+                    # Documents without page number stamps are not flagged — that's normal.
                 elif pattern_def["name"] == "duplicate_lines":
                     # Check for duplicate TRANSACTION lines (not headers/footers/addresses)
                     # Only flag lines that contain financial data (amounts, dates, check numbers)
