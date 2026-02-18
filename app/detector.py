@@ -594,9 +594,21 @@ class AnomalyDetector:
                             # Exclude common headers/footers by checking for keywords
                             lower_line = line_clean.lower()
                             is_header = any(keyword in lower_line for keyword in [
+                                # Bank statement column headers / footers
                                 'page', 'account', 'statement', 'balance', 'date', 'description',
                                 'amount', 'check', 'deposit', 'withdrawal', 'branch', 'address',
-                                'customer service', 'member fdic', 'routing', 'account number'
+                                'customer service', 'member fdic', 'routing', 'account number',
+                                # Bank boilerplate that repeats on every page
+                                'annual percentage yield', 'apy earned', 'apy ',
+                                'interest paid', 'interest earned',
+                                'average daily balance', 'minimum balance',
+                                'overdraft', 'service charge', 'maintenance fee',
+                                # Court filing / NYSCEF stamp lines
+                                'nyscef', 'filed:', 'index no.', 'county clerk',
+                                'received nyscef', 'doc. no.', 'supreme court',
+                                'appellate division', 'court of appeals',
+                                # Generic document stamp patterns
+                                'confidential', 'draft', 'privileged',
                             ])
 
                             # Only track non-header lines with transaction data
