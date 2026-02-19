@@ -5,6 +5,29 @@ All notable changes to the Paperless Anomaly Detector project will be documented
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5] - 2026-02-19
+
+### Fixed
+- **Legacy bare tag cleanup**: `replace_document_anomaly_tags()` now also strips old bare tag names
+  (`balance_mismatch`, `check_sequence_gap`, `layout_irregularity`, `page_discontinuity`,
+  `duplicate_lines`, `reversed_columns`, `truncated_total`, `image_manipulation`, `detected`)
+  that were written by pre-prefix versions of the code and were previously left stuck in Paperless.
+
+### Added
+- **`sync_all_tags_to_paperless()`**: Pushes stored anomaly results from the local database back
+  to Paperless for every processed document without re-running detection. Simultaneously removes
+  all legacy bare tags and stale `anomaly:*` tags, then re-applies the correct current tags.
+- **Periodic tag sync job**: Runs automatically every 6 hours to keep Paperless tags in sync
+  with the local database (catches any drift between restarts or manual Paperless edits).
+- **`reprocess_modified_documents()`**: Re-runs full anomaly detection on any document whose
+  Paperless `modified` timestamp is newer than `processed_at` in the local database. Treats
+  Paperless as the master — if a document is re-OCR'd or updated in Paperless, it is
+  automatically re-queued for detection.
+- **Hourly modified-document recheck job**: Runs `reprocess_modified_documents()` every hour.
+- **`POST /api/sync-tags`**: HTTP endpoint to manually trigger a tag-sync pass.
+- **`POST /api/reprocess-modified`**: HTTP endpoint to manually trigger reprocessing of
+  Paperless-modified documents.
+
 ## [1.2] - 2026-02-04
 
 ### Fixed
