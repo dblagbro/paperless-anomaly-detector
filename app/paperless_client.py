@@ -51,41 +51,55 @@ class PaperlessClient:
     def get_recent_documents(
         self,
         minutes: int = None,
-        limit: int = 100,
+        limit: int = None,
         ordering: str = "-created"
     ) -> List[Dict]:
         """
-        Get recently created documents from Paperless.
+        Get documents from Paperless, paginating through all results.
 
         Args:
             minutes: Only fetch documents created in the last N minutes (None for all)
-            limit: Maximum number of documents to return
+            limit: Maximum total documents to return (None = no limit, fetch all pages)
             ordering: Sort order (default: newest first)
 
         Returns:
             List of document dictionaries
         """
+        page_size = 100  # Paperless default max page size
         params = {
-            "page_size": limit,
-            "ordering": ordering
+            "page_size": page_size,
+            "ordering": ordering,
+            "page": 1,
         }
 
         if minutes:
-            # Calculate cutoff time
             cutoff = datetime.utcnow() - timedelta(minutes=minutes)
-            cutoff_str = cutoff.strftime("%Y-%m-%d")
-            params["created__date__gte"] = cutoff_str
+            params["created__date__gte"] = cutoff.strftime("%Y-%m-%d")
 
-        logger.info(f"Fetching documents with params: {params}")
+        logger.info(f"Fetching documents from Paperless (limit={limit or 'all'})...")
 
+        all_documents = []
         try:
-            response = self._make_request("GET", "/api/documents/", params=params)
-            documents = response.get("results", [])
-            logger.info(f"Fetched {len(documents)} documents")
-            return documents
+            while True:
+                response = self._make_request("GET", "/api/documents/", params=params)
+                page_docs = response.get("results", [])
+                all_documents.extend(page_docs)
+
+                if limit and len(all_documents) >= limit:
+                    all_documents = all_documents[:limit]
+                    break
+
+                next_url = response.get("next")
+                if not next_url:
+                    break
+
+                params["page"] = params["page"] + 1
+
+            logger.info(f"Fetched {len(all_documents)} documents total")
+            return all_documents
         except Exception as e:
             logger.error(f"Failed to fetch documents: {e}")
-            return []
+            return all_documents  # return whatever was fetched before the error
 
     def get_document(self, doc_id: int) -> Optional[Dict]:
         """Get a single document by ID."""
@@ -268,7 +282,6 @@ class PaperlessClient:
         except Exception as e:
             logger.error(f"Failed to get/create tag '{tag_name}': {e}")
             return None
-            return None
 
     def get_or_create_custom_field(self, field_name: str, data_type: str = "string") -> Optional[int]:
         """Get custom field ID by name, creating it if it doesn't exist."""
@@ -371,7 +384,6 @@ class PaperlessClient:
 
         except Exception as e:
             logger.error(f"Failed to get/create document type '{type_name}': {e}")
-            return None
             return None
 
     def update_document_type(self, doc_id: int, doc_type_name: str) -> bool:
