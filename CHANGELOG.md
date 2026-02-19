@@ -5,6 +5,19 @@ All notable changes to the Paperless Anomaly Detector project will be documented
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-02-19
+
+### Fixed
+- **Stale record cleanup in tag sync**: `sync_all_tags_to_paperless()` now detects when a
+  document no longer exists in Paperless (HTTP 404) and automatically removes the orphaned
+  record (and its associated anomaly log entries) from the local database instead of counting
+  it as a sync failure.
+- **Backfill fetches all documents**: `process_all_documents()` now passes `limit=None` to
+  `get_recent_documents()` so it paginates through the full Paperless corpus rather than
+  capping at 1 000 documents.
+- **Removed duplicate `return None` statements** in `get_or_create_tag()` and
+  `get_or_create_document_type()` (dead code from earlier edits).
+
 ## [1.5] - 2026-02-19
 
 ### Fixed
