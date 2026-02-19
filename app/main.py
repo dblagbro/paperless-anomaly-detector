@@ -257,6 +257,51 @@ def backfill_documents(batch_size: int = Query(50, description="Batch size for p
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/sync-tags")
+def sync_tags():
+    """Sync stored anomaly results → Paperless tags for every processed document.
+
+    This is a non-destructive operation: no re-detection is run.  It pushes the
+    anomaly_types already stored in the local database back to Paperless, which:
+      - removes stuck legacy bare tags (balance_mismatch, etc.)
+      - removes any stale anomaly:* tags that no longer reflect stored results
+      - re-applies the correct anomaly:* tags from stored results
+    Safe to run repeatedly; runs in the background.
+    """
+    try:
+        import threading
+        t = threading.Thread(target=scheduler.trigger_sync, daemon=True)
+        t.start()
+        return {
+            "status": "triggered",
+            "message": "Tag sync started in background — check logs for progress"
+        }
+    except Exception as e:
+        logger.error(f"Error triggering tag sync: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/reprocess-modified")
+def reprocess_modified():
+    """Re-run full anomaly detection on documents modified in Paperless since last processing.
+
+    Treats Paperless as the master: any document whose 'modified' timestamp in Paperless
+    is newer than its 'processed_at' in the local database is re-queued for full detection.
+    Runs in the background.
+    """
+    try:
+        import threading
+        t = threading.Thread(target=scheduler.trigger_reprocess_modified, daemon=True)
+        t.start()
+        return {
+            "status": "triggered",
+            "message": "Modified-document reprocess started in background — check logs for progress"
+        }
+    except Exception as e:
+        logger.error(f"Error triggering reprocess-modified: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/", response_class=HTMLResponse)
 def read_root():
     """Serve the main dashboard HTML."""
