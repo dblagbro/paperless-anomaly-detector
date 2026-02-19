@@ -76,7 +76,7 @@ class DocumentProcessor:
             # Fetch all documents without date filter
             all_documents = self.paperless_client.get_recent_documents(
                 minutes=None,  # No time filter
-                limit=1000  # Get up to 1000 documents
+                limit=None     # Paginate through all documents
             )
 
             if not all_documents:
@@ -226,10 +226,14 @@ class DocumentProcessor:
           - removes legacy bare tag names (balance_mismatch, etc.)
           - removes stale anomaly:* tags that no longer apply
           - re-adds the current correct set of anomaly:* tags
+
+        Stale records (where the Paperless document was deleted) are removed from
+        the local DB automatically.
         """
         logger.info("Starting tag sync: pushing stored results to Paperless for all processed documents...")
         synced = 0
         failed = 0
+        removed_stale = 0
 
         with get_db() as db:
             docs = db.query(ProcessedDocument).all()
@@ -238,6 +242,23 @@ class DocumentProcessor:
 
             for doc in docs:
                 try:
+                    # Check whether the document still exists in Paperless
+                    paperless_doc = self.paperless_client.get_document(doc.paperless_doc_id)
+                    if paperless_doc is None:
+                        # Document deleted from Paperless — remove stale local record
+                        logger.info(
+                            f"Document {doc.paperless_doc_id} no longer exists in Paperless "
+                            f"('{doc.title}') — removing stale DB record"
+                        )
+                        # Also remove associated anomaly log entries
+                        db.query(AnomalyLog).filter(
+                            AnomalyLog.paperless_doc_id == doc.paperless_doc_id
+                        ).delete()
+                        db.delete(doc)
+                        db.commit()
+                        removed_stale += 1
+                        continue
+
                     tags_to_set = [
                         f"anomaly:{atype}"
                         for atype in (doc.anomaly_types or [])
@@ -256,7 +277,10 @@ class DocumentProcessor:
                     logger.error(f"Tag sync error for document {doc.paperless_doc_id}: {e}")
                     failed += 1
 
-        logger.info(f"Tag sync complete: {synced} synced, {failed} failed out of {total} documents")
+        logger.info(
+            f"Tag sync complete: {synced} synced, {removed_stale} stale records removed, "
+            f"{failed} failed out of {total} documents"
+        )
 
     def reprocess_modified_documents(self):
         """Re-run full detection on documents whose Paperless modified date is newer than processed_at.
