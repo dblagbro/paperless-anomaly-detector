@@ -1,6 +1,7 @@
 """Background job scheduler for polling Paperless and processing documents."""
 import logging
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 from typing import Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -216,6 +217,118 @@ class DocumentProcessor:
             except Exception as add_error:
                 logger.error(f"Failed to add error record for document {doc_id}: {add_error}")
 
+    def sync_all_tags_to_paperless(self):
+        """Push stored anomaly results back to Paperless for every processed document.
+
+        This is a non-destructive sync: no detection is re-run. For each document
+        already in the local DB, it calls replace_document_anomaly_tags() using the
+        stored anomaly_types. This simultaneously:
+          - removes legacy bare tag names (balance_mismatch, etc.)
+          - removes stale anomaly:* tags that no longer apply
+          - re-adds the current correct set of anomaly:* tags
+        """
+        logger.info("Starting tag sync: pushing stored results to Paperless for all processed documents...")
+        synced = 0
+        failed = 0
+
+        with get_db() as db:
+            docs = db.query(ProcessedDocument).all()
+            total = len(docs)
+            logger.info(f"Syncing tags for {total} documents...")
+
+            for doc in docs:
+                try:
+                    tags_to_set = [
+                        f"anomaly:{atype}"
+                        for atype in (doc.anomaly_types or [])
+                    ]
+                    success = self.paperless_client.replace_document_anomaly_tags(
+                        doc.paperless_doc_id, tags_to_set
+                    )
+                    if success:
+                        synced += 1
+                    else:
+                        logger.warning(f"Tag sync failed for document {doc.paperless_doc_id}")
+                        failed += 1
+                    # Brief pause to avoid hammering the Paperless API
+                    time.sleep(0.15)
+                except Exception as e:
+                    logger.error(f"Tag sync error for document {doc.paperless_doc_id}: {e}")
+                    failed += 1
+
+        logger.info(f"Tag sync complete: {synced} synced, {failed} failed out of {total} documents")
+
+    def reprocess_modified_documents(self):
+        """Re-run full detection on documents whose Paperless modified date is newer than processed_at.
+
+        Paperless is treated as the master: if a document has been updated in Paperless
+        (re-OCR'd, content edited, etc.) since it was last processed here, it is re-queued
+        for full anomaly detection.
+        """
+        logger.info("Checking for Paperless documents modified since last processing...")
+
+        try:
+            all_paperless_docs = self.paperless_client.get_recent_documents(
+                minutes=None, limit=5000
+            )
+        except Exception as e:
+            logger.error(f"Failed to fetch documents from Paperless: {e}")
+            return
+
+        if not all_paperless_docs:
+            logger.info("No documents returned from Paperless")
+            return
+
+        reprocessed = 0
+        with get_db() as db:
+            for doc in all_paperless_docs:
+                doc_id = doc["id"]
+                existing = db.query(ProcessedDocument).filter(
+                    ProcessedDocument.paperless_doc_id == doc_id
+                ).first()
+
+                if not existing:
+                    continue  # New doc — handled by process_new_documents()
+
+                # Parse Paperless modified timestamp
+                modified_str = doc.get("modified") or doc.get("updated")
+                if not modified_str:
+                    continue
+                try:
+                    paperless_modified = datetime.fromisoformat(
+                        modified_str.replace("Z", "+00:00")
+                    )
+                    # Make processed_at timezone-aware for comparison
+                    processed_at = existing.processed_at
+                    if processed_at.tzinfo is None:
+                        processed_at = processed_at.replace(tzinfo=timezone.utc)
+                    if paperless_modified <= processed_at:
+                        continue  # Not modified since last processing
+                except Exception:
+                    continue
+
+                logger.info(
+                    f"Document {doc_id} modified in Paperless since last processing "
+                    f"(modified={modified_str}, processed={existing.processed_at.isoformat()})"
+                    f" — re-running detection"
+                )
+                try:
+                    # Delete old record so _process_document can create a fresh one
+                    db.delete(existing)
+                    db.flush()
+                    self._process_document(db, doc)
+                    db.commit()
+                    reprocessed += 1
+                    time.sleep(0.15)
+                except Exception as e:
+                    logger.error(f"Failed to reprocess document {doc_id}: {e}")
+                    db.rollback()
+
+        if reprocessed:
+            logger.info(f"Reprocessed {reprocessed} modified document(s)")
+        else:
+            logger.info("No modified documents found that need reprocessing")
+
     def _write_to_paperless(self, doc_id: int, results: dict, processed_doc: ProcessedDocument):
         """Write detection results back to Paperless as tags and custom fields."""
         try:
@@ -322,7 +435,7 @@ class DocumentScheduler:
         """Start the background scheduler."""
         self.processor = DocumentProcessor(paperless_client, detector)
 
-        # Add polling job
+        # Job 1: poll for new documents on the normal interval
         self.scheduler.add_job(
             func=self.processor.process_new_documents,
             trigger=IntervalTrigger(seconds=settings.polling_interval),
@@ -331,8 +444,27 @@ class DocumentScheduler:
             replace_existing=True
         )
 
+        # Job 2: sync all stored anomaly results → Paperless tags every 6 hours
+        self.scheduler.add_job(
+            func=self.processor.sync_all_tags_to_paperless,
+            trigger=IntervalTrigger(hours=6),
+            id='sync_tags',
+            name='Sync anomaly tags to Paperless',
+            replace_existing=True
+        )
+
+        # Job 3: re-detect documents modified in Paperless since last processing, every hour
+        self.scheduler.add_job(
+            func=self.processor.reprocess_modified_documents,
+            trigger=IntervalTrigger(hours=1),
+            id='reprocess_modified',
+            name='Reprocess Paperless-modified documents',
+            replace_existing=True
+        )
+
         self.scheduler.start()
-        logger.info(f"Scheduler started: polling every {settings.polling_interval} seconds")
+        logger.info(f"Scheduler started: polling every {settings.polling_interval} seconds; "
+                    "tag sync every 6 h; modified-doc recheck every 1 h")
 
     def stop(self):
         """Stop the scheduler."""
@@ -351,3 +483,15 @@ class DocumentScheduler:
         if self.processor:
             logger.info("Starting backfill of all documents...")
             self.processor.process_all_documents(batch_size=batch_size)
+
+    def trigger_sync(self):
+        """Manually trigger a tag-sync pass against Paperless."""
+        if self.processor:
+            logger.info("Manually triggering tag sync...")
+            self.processor.sync_all_tags_to_paperless()
+
+    def trigger_reprocess_modified(self):
+        """Manually trigger reprocessing of documents modified in Paperless."""
+        if self.processor:
+            logger.info("Manually triggering reprocess of modified documents...")
+            self.processor.reprocess_modified_documents()

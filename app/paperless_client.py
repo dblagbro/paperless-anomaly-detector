@@ -181,14 +181,23 @@ class PaperlessClient:
             logger.error(traceback.format_exc())
             return False
 
+    # Legacy bare tag names written by pre-prefix versions of this code.
+    # These are removed alongside anomaly:* tags on every sync.
+    LEGACY_ANOMALY_TAG_NAMES = {
+        'balance_mismatch', 'check_sequence_gap', 'layout_irregularity',
+        'page_discontinuity', 'duplicate_lines', 'reversed_columns',
+        'truncated_total', 'image_manipulation', 'detected',
+    }
+
     def replace_document_anomaly_tags(self, doc_id: int, new_anomaly_tag_names: List[str]) -> bool:
         """
         Replace all anomaly tags on a document with the current detection results.
-        Removes old anomaly:* tags and adds new ones, preserving non-anomaly tags.
+        Removes old anomaly:* tags AND legacy bare tag names, then adds new ones,
+        preserving all unrelated tags.
 
         Args:
             doc_id: Document ID
-            new_anomaly_tag_names: List of anomaly tag names to set (e.g., ['anomaly:detected', 'anomaly:page_discontinuity'])
+            new_anomaly_tag_names: List of anomaly tag names to set (e.g., ['anomaly:balance_mismatch'])
 
         Returns:
             True if successful, False otherwise
@@ -207,10 +216,11 @@ class PaperlessClient:
             response = self._make_request("GET", "/api/tags/")
             all_tags = {tag["id"]: tag["name"] for tag in response.get("results", [])}
 
-            # Separate anomaly tags from other tags
+            # Strip both anomaly:* prefixed tags AND legacy bare tag names
             non_anomaly_tag_ids = [
                 tag_id for tag_id in current_tag_ids
                 if not all_tags.get(tag_id, "").startswith("anomaly:")
+                and all_tags.get(tag_id, "") not in self.LEGACY_ANOMALY_TAG_NAMES
             ]
 
             logger.debug(f"Document {doc_id}: removing anomaly tags, keeping {len(non_anomaly_tag_ids)} non-anomaly tags")
