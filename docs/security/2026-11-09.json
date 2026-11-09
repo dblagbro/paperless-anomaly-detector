@@ -1,0 +1,30 @@
+{
+  "image": "sha256:b47f8b98492119d6e07c22c1d7fff021dfd989dcb8d88eedca054090bbc9ebc6",
+  "runtime_source_commit": "f979f940baf6969636323e50f908e991d3c43498",
+  "candidate_tests": {
+    "passed": 11,
+    "failed": 0,
+    "skipped": 0,
+    "application_code_from_image": true,
+    "network": "none",
+    "synthetic_state_only": true,
+    "pip_check": true
+  },
+  "scan": {
+    "critical": 0,
+    "high": 52,
+    "previous_baseline_critical": 12,
+    "previous_baseline_high": 630,
+    "same_database_comparison": false
+  },
+  "deployment_claimed": false,
+  "residuals": [
+    "51 Debian High matches have no scanner-listed fixed version.",
+    "Setuptools70.3.0 is attributed to the pip vendor SBOM; installed distribution is84.2.1. Preserve metadata and review applicability."
+  ],
+  "limitations": [
+    "Tests use synthetic documents/images and a disposable database; no real Paperless writes or LLM calls.",
+    "Pydantic2 deprecated validators remain compatible; migration is needed before a future Pydantic3 upgrade.",
+    "Build inputs pin the base and Python archives, but Debian repository updates may advance."
+  ]
+}
