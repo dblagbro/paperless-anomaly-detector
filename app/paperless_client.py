@@ -263,28 +263,94 @@ class PaperlessClient:
             return False
 
     def get_or_create_tag(self, tag_name: str) -> Optional[int]:
-        """Get tag ID by name, creating it if it doesn't exist."""
-        try:
-            # Search for existing tag (Paperless returns partial matches, so we need exact match)
-            response = self._make_request("GET", "/api/tags/", params={"name": tag_name})
-            results = response.get("results", [])
+        """Get tag ID by name, creating it if it doesn't exist.
 
-            # Find exact match (API does partial matching)
-            for tag in results:
-                if tag["name"] == tag_name:
-                    logger.debug(f"Found existing tag '{tag_name}' with ID {tag['id']}")
-                    return tag["id"]
+        v1.5.2 (2026-06-17): handle GET-then-POST race. On 400 +
+        unique-constraint, re-GET — the tag exists, we just lost the race.
+
+        v1.5.3 (2026-06-18): v1.5.2's single re-GET wasn't enough — the
+        race-won re-GET was running BEFORE the racing creator's row was
+        visible to subsequent reads (paperless-web's transaction hadn't
+        committed yet, or the GET hit a different gunicorn worker than
+        the POST). Added a small retry loop with exponential backoff
+        (50ms, 150ms, 400ms) on the re-GET so a 50-150ms commit gap
+        no longer drops the tag. ALSO: in the original GET-tag path,
+        loop through paginated results — paperless's /api/tags/ default
+        page_size is 25, and at 30+ active anomaly tags the exact-match
+        tag might live on page 2.
+        """
+        import time as _time
+        try:
+            # Search for existing tag — page through results so an exact
+            # match on page 2+ is found.
+            page = 1
+            while True:
+                response = self._make_request(
+                    "GET", "/api/tags/",
+                    params={"name": tag_name, "page": page, "page_size": 100},
+                )
+                results = response.get("results", [])
+                for tag in results:
+                    if tag["name"] == tag_name:
+                        logger.debug(f"Found existing tag '{tag_name}' with ID {tag['id']}")
+                        return tag["id"]
+                if not response.get("next"):
+                    break
+                page += 1
 
             # Create new tag if not found
-            response = self._make_request("POST", "/api/tags/", json={"name": tag_name})
-            logger.info(f"Created new tag: {tag_name} with ID {response.get('id')}")
-            return response.get("id")
+            try:
+                response = self._make_request("POST", "/api/tags/", json={"name": tag_name})
+                logger.info(f"Created new tag: {tag_name} with ID {response.get('id')}")
+                return response.get("id")
+            except httpx.HTTPStatusError as e:
+                if (
+                    e.response.status_code == 400
+                    and "unique constraint" in e.response.text.lower()
+                ):
+                    # Lost the race. The racing creator's row may not be
+                    # visible yet — retry with backoff so a 50-150ms
+                    # commit lag doesn't drop us into the outer except.
+                    for delay in (0.05, 0.15, 0.40):
+                        _time.sleep(delay)
+                        try:
+                            response = self._make_request(
+                                "GET", "/api/tags/",
+                                params={"name": tag_name, "page_size": 100},
+                            )
+                        except Exception:
+                            continue
+                        for tag in response.get("results", []):
+                            if tag["name"] == tag_name:
+                                logger.info(
+                                    f"get_or_create_tag race won by peer; "
+                                    f"reusing '{tag_name}' with ID {tag['id']} "
+                                    f"after {delay*1000:.0f}ms backoff"
+                                )
+                                return tag["id"]
+                    # All retries exhausted — log + return None so the
+                    # caller can continue without this tag. Severity
+                    # warning, not error — the unique-constraint hit
+                    # itself is benign; the missing tag for this batch
+                    # is the cost we can't recover.
+                    logger.warning(
+                        f"get_or_create_tag '{tag_name}' lost race but tag "
+                        f"not visible after 600ms total backoff — paperless-web "
+                        f"replication lag? skipping for this document."
+                    )
+                    return None
+                raise
         except Exception as e:
             logger.error(f"Failed to get/create tag '{tag_name}': {e}")
             return None
 
     def get_or_create_custom_field(self, field_name: str, data_type: str = "string") -> Optional[int]:
-        """Get custom field ID by name, creating it if it doesn't exist."""
+        """Get custom field ID by name, creating it if it doesn't exist.
+
+        v1.5.2 (2026-06-17): same GET-then-POST race fix as get_or_create_tag.
+        v1.5.3 (2026-06-18): same backoff retry as get_or_create_tag.
+        """
+        import time as _time
         try:
             # Search for existing field
             response = self._make_request("GET", "/api/custom_fields/", params={"name": field_name})
@@ -298,9 +364,38 @@ class PaperlessClient:
                 "name": field_name,
                 "data_type": data_type  # string, integer, float, boolean, date, url
             }
-            response = self._make_request("POST", "/api/custom_fields/", json=field_data)
-            logger.info(f"Created new custom field: {field_name}")
-            return response.get("id")
+            try:
+                response = self._make_request("POST", "/api/custom_fields/", json=field_data)
+                logger.info(f"Created new custom field: {field_name}")
+                return response.get("id")
+            except httpx.HTTPStatusError as e:
+                if (
+                    e.response.status_code == 400
+                    and "unique constraint" in e.response.text.lower()
+                ):
+                    for delay in (0.05, 0.15, 0.40):
+                        _time.sleep(delay)
+                        try:
+                            response = self._make_request(
+                                "GET", "/api/custom_fields/",
+                                params={"name": field_name},
+                            )
+                        except Exception:
+                            continue
+                        results = response.get("results", [])
+                        if results:
+                            logger.info(
+                                f"get_or_create_custom_field race won by peer; "
+                                f"reusing '{field_name}' with ID {results[0]['id']} "
+                                f"after {delay*1000:.0f}ms backoff"
+                            )
+                            return results[0]["id"]
+                    logger.warning(
+                        f"get_or_create_custom_field '{field_name}' lost race "
+                        f"but field not visible after 600ms total backoff."
+                    )
+                    return None
+                raise
         except Exception as e:
             logger.error(f"Failed to get/create custom field '{field_name}': {e}")
             return None
